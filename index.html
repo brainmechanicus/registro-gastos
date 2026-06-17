@@ -320,7 +320,11 @@
         <div class="header-month" id="headerMonth">Junho 2026</div>
         <div class="header-title">Controle de Gastos</div>
       </div>
-      <button class="btn-icon" onclick="exportCSV()">📤 Exportar</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-icon" id="syncBtn" onclick="syncNow()">☁️</button>
+        <button class="btn-icon" onclick="openSettings()">⚙️</button>
+        <button class="btn-icon" onclick="exportCSV()">📤</button>
+      </div>
     </div>
   </div>
 
@@ -404,6 +408,31 @@
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
+<!-- Settings Sheet -->
+<div class="overlay" id="overlaySettings" onclick="closeSettings()"></div>
+<div class="sheet" id="settingsSheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-title">☁️ Sincronização</div>
+  <div class="sheet-content">
+    <p style="font-size:13px; color:var(--muted); line-height:1.6; margin-bottom:16px;">
+      Conecte com sua planilha do Google para sincronizar entre celular e computador. Cole a URL do app e a senha que você definiu no script.
+    </p>
+    <div class="form-group">
+      <label class="form-label">URL do Apps Script</label>
+      <input type="text" id="inputSyncUrl" class="form-input" placeholder="https://script.google.com/.../exec" autocapitalize="off" autocorrect="off">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Senha de sincronização</label>
+      <input type="text" id="inputSyncKey" class="form-input" placeholder="a senha que você definiu" autocapitalize="off" autocorrect="off">
+    </div>
+    <button class="btn-submit" onclick="saveSettings()">Salvar e sincronizar ✓</button>
+    <button class="btn-delete-full" onclick="disableSync()" style="display:block;">Desconectar sincronização</button>
+    <p style="font-size:11px; color:var(--muted); line-height:1.5; margin-top:14px; text-align:center;">
+      A URL e a senha ficam salvas só neste aparelho.
+    </p>
+  </div>
+</div>
+
 <script>
 // ========================
 // CONFIG: metas por categoria (baseadas na análise de Jan-Jun 2026)
@@ -442,7 +471,7 @@ let currentMonth = new Date().getMonth();
 let currentYear = new Date().getFullYear();
 
 // ========================
-// STORAGE
+// STORAGE (local) + SYNC (Google Sheets)
 // ========================
 function save() {
   try { localStorage.setItem('gastos_v2', JSON.stringify(expenses)); } catch(e) {}
@@ -452,6 +481,95 @@ function load() {
     const d = localStorage.getItem('gastos_v2');
     if (d) expenses = JSON.parse(d);
   } catch(e) { expenses = []; }
+}
+
+// Sync config (kept only in localStorage — never in the public code)
+function getSyncConfig() {
+  try {
+    return {
+      url: localStorage.getItem('sync_url') || '',
+      key: localStorage.getItem('sync_key') || ''
+    };
+  } catch(e) { return { url:'', key:'' }; }
+}
+function setSyncConfig(url, key) {
+  try {
+    localStorage.setItem('sync_url', url.trim());
+    localStorage.setItem('sync_key', key.trim());
+  } catch(e) {}
+}
+function isSyncEnabled() {
+  const c = getSyncConfig();
+  return !!(c.url && c.key);
+}
+
+// Merge two lists by id, keeping the most recently updated version
+function mergeExpenses(local, remote) {
+  const map = {};
+  [...local, ...remote].forEach(e => {
+    if (!e || !e.id) return;
+    const existing = map[e.id];
+    if (!existing) { map[e.id] = e; return; }
+    const a = e.updatedAt || e.createdAt || 0;
+    const b = existing.updatedAt || existing.createdAt || 0;
+    if (a >= b) map[e.id] = e;
+  });
+  // Keep everything, including soft-deleted (so deletions propagate)
+  return Object.values(map);
+}
+
+let syncing = false;
+async function syncNow(silent) {
+  const cfg = getSyncConfig();
+  if (!cfg.url || !cfg.key) {
+    if (!silent) { openSettings(); showToast('Configure a sincronização primeiro', true); }
+    return;
+  }
+  if (syncing) return;
+  syncing = true;
+  setSyncIcon('spin');
+
+  try {
+    // 1. PUSH local state to the cloud and GET the merged authoritative list back
+    const payload = { key: cfg.key, expenses: expenses };
+    const res = await fetch(cfg.url, {
+      method: 'POST',
+      // text/plain avoids a CORS preflight that Apps Script handles poorly
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      setSyncIcon('error');
+      if (!silent) showToast('Erro: ' + data.error, true);
+      syncing = false;
+      return;
+    }
+
+    // 2. Merge what came back with local, save, re-render
+    const remote = Array.isArray(data.expenses) ? data.expenses : [];
+    expenses = mergeExpenses(expenses, remote);
+    save();
+    setSyncIcon('ok');
+    if (!silent) showToast('Sincronizado! ✓');
+    render();
+  } catch (err) {
+    setSyncIcon('error');
+    if (!silent) showToast('Falha de conexão. Tente de novo.', true);
+  }
+  syncing = false;
+}
+
+function setSyncIcon(state) {
+  const btn = document.getElementById('syncBtn');
+  if (!btn) return;
+  if (!isSyncEnabled()) { btn.textContent = '☁️'; btn.style.opacity = '0.4'; return; }
+  btn.style.opacity = '1';
+  if (state === 'spin') btn.textContent = '🔄';
+  else if (state === 'ok') { btn.textContent = '✅'; setTimeout(()=>{ if(!syncing) btn.textContent='☁️'; }, 1500); }
+  else if (state === 'error') btn.textContent = '⚠️';
+  else btn.textContent = '☁️';
 }
 
 // ========================
@@ -468,6 +586,7 @@ function getCat(id) { return CATEGORIES.find(c => c.id === id) || CATEGORIES[7];
 function getPay(id) { return PAYMENTS.find(p => p.id === id) || null; }
 function getMonthExpenses() {
   return expenses.filter(e => {
+    if (e.deleted) return false;
     const d = new Date(e.date + 'T00:00:00');
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   });
@@ -795,7 +914,8 @@ function submitExpense() {
         sub: selectedSub,
         pay: selectedPay,
         shared: isShared,
-        date
+        date,
+        updatedAt: Date.now()
       };
     }
     save();
@@ -805,6 +925,7 @@ function submitExpense() {
     currentYear = d.getFullYear();
     render();
     showToast('Gasto atualizado! ✓');
+    if (isSyncEnabled()) syncNow(true);
     return;
   }
 
@@ -817,7 +938,9 @@ function submitExpense() {
     pay: selectedPay,
     shared: isShared,
     date,
-    createdAt: Date.now()
+    deleted: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
   };
 
   expenses.push(expense);
@@ -831,6 +954,7 @@ function submitExpense() {
 
   render();
   showToast('Gasto registrado! ✓');
+  if (isSyncEnabled()) syncNow(true);
 }
 
 // ========================
@@ -838,21 +962,30 @@ function submitExpense() {
 // ========================
 function deleteExpense(id) {
   if (!confirm('Remover este lançamento?')) return;
-  expenses = expenses.filter(e => e.id !== id);
+  softDelete(id);
   save();
   render();
   showToast('Removido');
+  if (isSyncEnabled()) syncNow(true);
+}
+function softDelete(id) {
+  const idx = expenses.findIndex(e => e.id === id);
+  if (idx !== -1) {
+    expenses[idx].deleted = true;
+    expenses[idx].updatedAt = Date.now();
+  }
 }
 function deleteFromSheet() {
   if (!editingId) return;
   const btn = document.getElementById('btnDelete');
   if (btn.dataset.armed === '1') {
-    // Second tap — actually delete
-    expenses = expenses.filter(e => e.id !== editingId);
+    // Second tap — actually delete (soft)
+    softDelete(editingId);
     save();
     closeSheet();
     render();
     showToast('Gasto excluído');
+    if (isSyncEnabled()) syncNow(true);
   } else {
     // First tap — arm the button
     btn.dataset.armed = '1';
@@ -932,6 +1065,41 @@ function showToast(msg, isError=false) {
 }
 
 // ========================
+// SETTINGS (sync config)
+// ========================
+function openSettings() {
+  const cfg = getSyncConfig();
+  document.getElementById('inputSyncUrl').value = cfg.url;
+  document.getElementById('inputSyncKey').value = cfg.key;
+  document.getElementById('settingsSheet').classList.add('active');
+  document.getElementById('overlaySettings').classList.add('active');
+}
+function closeSettings() {
+  document.getElementById('settingsSheet').classList.remove('active');
+  document.getElementById('overlaySettings').classList.remove('active');
+}
+function saveSettings() {
+  const url = document.getElementById('inputSyncUrl').value.trim();
+  const key = document.getElementById('inputSyncKey').value.trim();
+  if (!url || !key) { showToast('Preencha URL e senha', true); return; }
+  if (!url.startsWith('https://')) { showToast('URL inválida', true); return; }
+  setSyncConfig(url, key);
+  closeSettings();
+  setSyncIcon();
+  showToast('Conectando...');
+  syncNow();
+}
+function disableSync() {
+  try {
+    localStorage.removeItem('sync_url');
+    localStorage.removeItem('sync_key');
+  } catch(e) {}
+  closeSettings();
+  setSyncIcon();
+  showToast('Sincronização desconectada');
+}
+
+// ========================
 // INIT
 // ========================
 load();
@@ -941,20 +1109,16 @@ const now = new Date();
 currentMonth = now.getMonth();
 currentYear = now.getFullYear();
 
-// If we have data in previous months, show the most recent month with data
-if (expenses.length > 0) {
-  const latest = expenses.sort((a,b) => new Date(b.date)-new Date(a.date))[0];
-  const d = new Date(latest.date + 'T00:00:00');
-  // only jump if it's different month/year
-  if (d.getMonth() !== currentMonth || d.getFullYear() !== currentYear) {
-    // keep current month but show it's empty
-  }
+render();
+setSyncIcon();
+
+// Auto-sync on startup if configured (pulls changes from other devices)
+if (isSyncEnabled()) {
+  syncNow(true);
 }
 
-render();
-
 // Handle Android back button
-window.addEventListener('popstate', () => closeSheet());
+window.addEventListener('popstate', () => { closeSheet(); closeSettings(); });
 </script>
 </body>
 </html>

@@ -330,6 +330,31 @@
   .nav-tab { flex: 1; padding: 9px; text-align: center; font-size: 12px; font-weight: 600; color: var(--muted); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
   .nav-tab.active { background: var(--surface3); color: var(--text); }
 
+  /* Filter bar (categories) */
+  .filter-bar {
+    display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 14px;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .filter-bar::-webkit-scrollbar { height: 0; }
+  .filter-chip {
+    flex-shrink: 0; background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: 18px; padding: 8px 14px; font-size: 13px; font-weight: 500;
+    color: var(--dim); cursor: pointer; white-space: nowrap; transition: all 0.15s;
+  }
+  .filter-chip:active { opacity: 0.7; }
+  .filter-chip.active { border-color: var(--itau); background: rgba(236,112,0,0.15); color: var(--text); font-weight: 600; }
+
+  /* Filter summary card */
+  .filter-summary {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .filter-summary-cat { font-size: 14px; font-weight: 700; }
+  .filter-summary-count { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .filter-summary-total { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+  .filter-summary-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
   /* Month nav */
   .month-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
   .month-nav-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; color: var(--text); cursor: pointer; font-size: 16px; }
@@ -555,6 +580,7 @@ let isInstallment = false;
 let isRecurring = false;
 let editingId = null;
 let viewMode = 'dashboard'; // 'dashboard' | 'transactions'
+let filterCategory = 'all'; // category id filter for transactions view
 let currentMonth = new Date().getMonth();
 let currentYear = new Date().getFullYear();
 
@@ -785,33 +811,8 @@ function render() {
     });
     bodyHTML += `</div></div>`;
 
-    // Last 5 transactions
-    if (monthExp.length > 0) {
-      const sorted = [...monthExp].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,5);
-      bodyHTML += `<div class="txn-section">
-        <div class="txn-section-header">
-          <span class="txn-day">Últimos lançamentos</span>
-          <span class="txn-day-total" onclick="setView('transactions')" style="cursor:pointer;color:var(--itau);">Ver todos →</span>
-        </div>
-        <div class="txn-list">`;
-      sorted.forEach(e => {
-        const cat = getCat(e.category);
-        const sharedBadge = e.shared ? '<span class="shared-badge">👥</span>' : '';
-        const instBadge = e.installmentTotal ? `<span class="meta-badge badge-inst">${e.installmentIndex}/${e.installmentTotal}</span>` : '';
-        const recBadge = e.recurringId ? '<span class="meta-badge badge-rec">🔁</span>' : '';
-        bodyHTML += `
-          <div class="txn-item tappable" onclick="openSheet('${e.id}')">
-            <div class="txn-icon">${cat.emoji}</div>
-            <div class="txn-body">
-              <div class="txn-desc">${escHtml(e.desc)}${instBadge}${recBadge}${sharedBadge}</div>
-              <div class="txn-cat">${cat.name}${e.sub ? ' · ' + escHtml(e.sub) : ''}${e.pay ? ' · ' + getPay(e.pay).emoji + ' ' + getPay(e.pay).name : ''} · ${fmtDate(e.date)}</div>
-            </div>
-            <div class="txn-amount" style="color:var(--red)">−${fmt(e.amount)}</div>
-            <div class="txn-edit-hint">✏️</div>
-          </div>`;
-      });
-      bodyHTML += `</div></div>`;
-    } else {
+    // Empty state when there are no transactions yet
+    if (monthExp.length === 0) {
       bodyHTML += `
         <div class="empty">
           <div class="empty-icon">📊</div>
@@ -821,16 +822,47 @@ function render() {
 
   } else {
     // TRANSACTIONS VIEW
-    if (monthExp.length === 0) {
+    // Filter bar (chips): "Todos" + one per category
+    let chips = `<div class="filter-chip ${filterCategory==='all'?'active':''}" onclick="setFilter('all')">Todos</div>`;
+    CATEGORIES.forEach(c => {
+      chips += `<div class="filter-chip ${filterCategory===c.id?'active':''}" onclick="setFilter('${c.id}')">${c.emoji} ${c.name}</div>`;
+    });
+    bodyHTML += `<div class="filter-bar">${chips}</div>`;
+
+    // Apply category filter
+    const filtered = (filterCategory === 'all')
+      ? monthExp
+      : monthExp.filter(e => e.category === filterCategory);
+
+    // Filtered total summary
+    if (filterCategory !== 'all') {
+      const fcat = getCat(filterCategory);
+      const ftotal = filtered.reduce((s,e) => s + e.amount, 0);
+      const fpct = Math.min(100, (ftotal / fcat.meta) * 100);
+      const fcolor = fpct < 70 ? 'var(--green)' : fpct < 90 ? 'var(--yellow)' : fpct < 100 ? 'var(--orange)' : 'var(--red)';
+      bodyHTML += `
+        <div class="filter-summary">
+          <div>
+            <div class="filter-summary-cat">${fcat.emoji} ${fcat.name}</div>
+            <div class="filter-summary-count">${filtered.length} lançamento${filtered.length!==1?'s':''}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="filter-summary-total" style="color:${fcolor}">${fmt(ftotal)}</div>
+            <div class="filter-summary-meta">meta: ${fmtShort(fcat.meta)}</div>
+          </div>
+        </div>`;
+    }
+
+    if (filtered.length === 0) {
       bodyHTML += `
         <div class="empty">
           <div class="empty-icon">🧾</div>
-          <div class="empty-text">Nenhum lançamento em ${getMonthLabel()}.</div>
+          <div class="empty-text">${filterCategory==='all' ? 'Nenhum lançamento em ' + getMonthLabel() + '.' : 'Nenhum lançamento nesta categoria em ' + getMonthLabel() + '.'}</div>
         </div>`;
     } else {
       // Group by day
       const byDay = {};
-      monthExp.forEach(e => {
+      filtered.forEach(e => {
         if (!byDay[e.date]) byDay[e.date] = [];
         byDay[e.date].push(e);
       });
@@ -1286,8 +1318,16 @@ function resetDeleteBtn() {
 // FILTER
 // ========================
 function filterCat(catId) {
-  setView('transactions');
-  // scroll to section would be nice — for now just switch view
+  filterCategory = catId;
+  viewMode = 'transactions';
+  render();
+  // scroll content back to top so the filtered list starts at the top
+  const c = document.getElementById('mainContent');
+  if (c) c.scrollTop = 0;
+}
+function setFilter(catId) {
+  filterCategory = catId;
+  render();
 }
 
 // ========================
@@ -1295,6 +1335,7 @@ function filterCat(catId) {
 // ========================
 function setView(v) {
   viewMode = v;
+  if (v === 'dashboard') filterCategory = 'all';
   render();
 }
 function prevMonth() {

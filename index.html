@@ -178,17 +178,25 @@
   .sheet {
     position: fixed; bottom: 0; left: 50%; transform: translateX(-50%) translateY(100%);
     max-width: 430px; width: 100%;
+    max-height: 90vh;
+    display: flex; flex-direction: column;
     background: var(--surface);
     border-radius: 22px 22px 0 0;
     border-top: 1px solid var(--border2);
     z-index: 101;
     transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
-    padding: 0 0 env(safe-area-inset-bottom, 20px);
   }
   .sheet.active { transform: translateX(-50%) translateY(0); }
-  .sheet-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 12px auto 0; }
-  .sheet-title { font-size: 18px; font-weight: 800; padding: 16px 20px 4px; }
-  .sheet-content { padding: 0 16px 16px; }
+  .sheet-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 12px auto 0; flex-shrink: 0; }
+  .sheet-title { font-size: 18px; font-weight: 800; padding: 16px 20px 4px; flex-shrink: 0; }
+  .sheet-content {
+    padding: 8px 16px 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 20px));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    flex: 1;
+  }
 
   /* Form */
   .form-group { margin-bottom: 14px; }
@@ -256,6 +264,38 @@
   .switch-knob { width: 22px; height: 22px; background: #fff; border-radius: 50%; position: absolute; top: 3px; left: 3px; transition: left 0.2s; }
   .switch.on .switch-knob { left: 21px; }
 
+  /* Option toggles (installment / recurring) — reuse shared-toggle look */
+  .opt-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface2); border: 1.5px solid var(--border2); border-radius: 12px;
+    padding: 13px 16px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.15s;
+  }
+  .opt-toggle.active { border-color: var(--purple); background: rgba(155,127,255,0.1); }
+  .opt-toggle-left { display: flex; align-items: center; gap: 11px; }
+  .opt-toggle-icon { font-size: 20px; }
+  .opt-toggle-title { font-size: 14px; font-weight: 600; }
+  .opt-toggle-desc { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .opt-detail { background: var(--surface2); border: 1.5px solid var(--border2); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; margin-top: -4px; }
+  .opt-detail .form-label { margin-bottom: 8px; }
+  .parcela-preview { font-size: 13px; color: var(--purple); font-weight: 600; margin-top: 10px; }
+  .parcela-preview:empty { display: none; }
+
+  /* Cancel button */
+  .btn-cancel {
+    width: 100%; background: transparent; color: var(--muted); border: none;
+    border-radius: 14px; padding: 14px; font-size: 14px; font-weight: 600;
+    cursor: pointer; margin-top: 4px; font-family: inherit;
+  }
+  .btn-cancel:active { color: var(--text); }
+
+  /* Installment / recurring badges on transactions */
+  .meta-badge {
+    font-size: 10px; border-radius: 5px; padding: 2px 6px; font-weight: 600; margin-left: 6px;
+    display: inline-block; vertical-align: middle;
+  }
+  .badge-inst { background: rgba(155,127,255,0.18); color: var(--purple); }
+  .badge-rec  { background: rgba(61,184,122,0.18); color: var(--green); }
+
   /* Shared badge on transactions */
   .shared-badge {
     font-size: 10px; background: rgba(91,138,240,0.18); color: var(--blue);
@@ -308,6 +348,8 @@
 
   /* Scrollbar */
   .content::-webkit-scrollbar { width: 0; }
+  .sheet-content::-webkit-scrollbar { width: 0; height: 0; }
+  .sheet-content { scrollbar-width: none; -ms-overflow-style: none; }
 </style>
 </head>
 <body>
@@ -354,7 +396,7 @@
       <label class="form-label">Valor</label>
       <div class="amount-input-wrap">
         <span class="amount-prefix">R$</span>
-        <input type="number" id="inputAmount" class="form-input amount-input" placeholder="0,00" step="0.01" min="0" inputmode="decimal">
+        <input type="number" id="inputAmount" class="form-input amount-input" placeholder="0,00" step="0.01" min="0" inputmode="decimal" oninput="onAmountInput()">
       </div>
     </div>
 
@@ -385,7 +427,48 @@
     <!-- Date -->
     <div class="form-group">
       <label class="form-label">Data</label>
-      <input type="date" id="inputDate" class="form-input">
+      <input type="date" id="inputDate" class="form-input" onchange="onDateInput()">
+    </div>
+
+    <!-- Installment toggle -->
+    <div class="opt-toggle" id="instToggle" onclick="toggleInstallment()">
+      <div class="opt-toggle-left">
+        <span class="opt-toggle-icon">💳</span>
+        <div>
+          <div class="opt-toggle-title">Gasto parcelado</div>
+          <div class="opt-toggle-desc">O valor informado é o total da compra</div>
+        </div>
+      </div>
+      <div class="switch" id="instSwitch"><div class="switch-knob"></div></div>
+    </div>
+    <div class="opt-detail" id="instDetail" style="display:none;">
+      <label class="form-label">Número de parcelas</label>
+      <input type="number" id="inputParcelas" class="form-input" placeholder="Ex: 3" min="2" max="48" inputmode="numeric" oninput="updateParcelaPreview()">
+      <div class="parcela-preview" id="parcelaPreview"></div>
+    </div>
+
+    <!-- Recurring toggle -->
+    <div class="opt-toggle" id="recToggle" onclick="toggleRecurring()">
+      <div class="opt-toggle-left">
+        <span class="opt-toggle-icon">🔁</span>
+        <div>
+          <div class="opt-toggle-title">Gasto recorrente</div>
+          <div class="opt-toggle-desc">Repete o mesmo valor todo mês</div>
+        </div>
+      </div>
+      <div class="switch" id="recSwitch"><div class="switch-knob"></div></div>
+    </div>
+    <div class="opt-detail" id="recDetail" style="display:none;">
+      <label class="form-label">Repetir até (mês/ano)</label>
+      <div class="date-row">
+        <div class="form-group" style="margin-bottom:0;">
+          <select id="inputRecMonth" class="form-input" onchange="updateRecPreview()"></select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <select id="inputRecYear" class="form-input" onchange="updateRecPreview()"></select>
+        </div>
+      </div>
+      <div class="parcela-preview" id="recPreview"></div>
     </div>
 
     <!-- Shared toggle -->
@@ -402,6 +485,7 @@
 
     <button class="btn-submit" id="btnSubmit" onclick="submitExpense()">Registrar →</button>
     <button class="btn-delete-full" id="btnDelete" onclick="deleteFromSheet()" style="display:none;">🗑️ Excluir gasto</button>
+    <button class="btn-cancel" onclick="closeSheet()">Cancelar</button>
   </div>
 </div>
 
@@ -438,16 +522,16 @@
 // CONFIG: metas por categoria (baseadas na análise de Jan-Jun 2026)
 // ========================
 const CATEGORIES = [
-  { id: 'lazer',       emoji: '🎭', name: 'Lazer',       meta: 3500,  color: '#9b7fff', subs: ['Streaming', 'Viagem', 'Passeios'] },
-  { id: 'shopping',    emoji: '🛍️', name: 'Shopping',    meta: 4000,  color: '#f0924a', subs: ['Pessoal', 'Casa', 'Presentes', 'Tecnologia'] },
-  { id: 'alimentacao', emoji: '🍽️', name: 'Alimentação', meta: 3500,  color: '#f0c94a', subs: ['Restaurante', 'Mercado', 'Delivery'] },
-  { id: 'corpomento',  emoji: '💪', name: 'CorpoMente',  meta: 2500,  color: '#5b8af0', subs: ['Saúde', 'Estética e Academia', 'Estudos'] },
-  { id: 'transporte',  emoji: '🚗', name: 'Transporte',  meta: 1500,  color: '#3db87a', subs: ['Uber', 'Carro'] },
-  { id: 'casa',        emoji: '🏠', name: 'Casa',        meta: 500,   color: '#f05454', subs: ['Limpeza', 'Segurança', 'Reparo'] },
-  { id: 'outros',      emoji: '📦', name: 'Outros',      meta: 1000,  color: '#6b6f87', subs: ['Diversos', 'Mãe/Pai'] },
+  { id: 'lazer',       emoji: '🎭', name: 'Lazer',       meta: 3000,  color: '#9b7fff', subs: ['Streaming', 'Viagem', 'Passeios'] },
+  { id: 'shopping',    emoji: '🛍️', name: 'Shopping',    meta: 2000,  color: '#f0924a', subs: ['Pessoal', 'Casa', 'Presentes'] },
+  { id: 'alimentacao', emoji: '🍽️', name: 'Alimentação', meta: 3000,  color: '#f0c94a', subs: ['Restaurante', 'Mercado', 'Delivery'] },
+  { id: 'corpomento',  emoji: '💪', name: 'CorpoMente',  meta: 2000,  color: '#5b8af0', subs: ['Saúde', 'Estética e Academia', 'Estudos'] },
+  { id: 'transporte',  emoji: '🚗', name: 'Transporte',  meta: 1300,  color: '#3db87a', subs: ['Uber', 'Carro'] },
+  { id: 'casa',        emoji: '🏠', name: 'Casa',        meta: 9890,  color: '#f05454', subs: ['Financiamento', 'Limpeza', 'Gás', 'Luz', 'Internet', 'Impostos', 'Reparo'] },
+  { id: 'outros',      emoji: '📦', name: 'Outros',      meta: 300,   color: '#6b6f87', subs: ['Diversos', 'Mãe/Pai'] },
   { id: 'taxas',       emoji: '🏷️', name: 'Taxas',       meta: 200,   color: '#6b6f87', subs: ['Tarifas'] },
 ];
-const META_TOTAL = 21000;
+const META_TOTAL = 21690;
 
 const PAYMENTS = [
   { id: 'theone', emoji: '🟧', name: 'The One' },
@@ -455,6 +539,8 @@ const PAYMENTS = [
   { id: 'c6',     emoji: '⬛', name: 'C6' },
   { id: 'amex',   emoji: '🟦', name: 'Amex' },
   { id: 'cc',     emoji: '🏦', name: 'Conta Corrente' },
+  { id: 'vr',     emoji: '🍴', name: 'Vale Refeição' },
+  { id: 'va',     emoji: '🛒', name: 'Vale Alimentação' },
 ];
 
 // ========================
@@ -465,6 +551,8 @@ let selectedCat = null;
 let selectedSub = null;
 let selectedPay = null;
 let isShared = false;
+let isInstallment = false;
+let isRecurring = false;
 let editingId = null;
 let viewMode = 'dashboard'; // 'dashboard' | 'transactions'
 let currentMonth = new Date().getMonth();
@@ -709,11 +797,13 @@ function render() {
       sorted.forEach(e => {
         const cat = getCat(e.category);
         const sharedBadge = e.shared ? '<span class="shared-badge">👥</span>' : '';
+        const instBadge = e.installmentTotal ? `<span class="meta-badge badge-inst">${e.installmentIndex}/${e.installmentTotal}</span>` : '';
+        const recBadge = e.recurringId ? '<span class="meta-badge badge-rec">🔁</span>' : '';
         bodyHTML += `
           <div class="txn-item tappable" onclick="openSheet('${e.id}')">
             <div class="txn-icon">${cat.emoji}</div>
             <div class="txn-body">
-              <div class="txn-desc">${escHtml(e.desc)}${sharedBadge}</div>
+              <div class="txn-desc">${escHtml(e.desc)}${instBadge}${recBadge}${sharedBadge}</div>
               <div class="txn-cat">${cat.name}${e.sub ? ' · ' + escHtml(e.sub) : ''}${e.pay ? ' · ' + getPay(e.pay).emoji + ' ' + getPay(e.pay).name : ''} · ${fmtDate(e.date)}</div>
             </div>
             <div class="txn-amount" style="color:var(--red)">−${fmt(e.amount)}</div>
@@ -758,11 +848,13 @@ function render() {
         dayExp.sort((a,b) => b.amount - a.amount).forEach(e => {
           const cat = getCat(e.category);
           const sharedBadge = e.shared ? '<span class="shared-badge">👥 compart.</span>' : '';
+          const instBadge = e.installmentTotal ? `<span class="meta-badge badge-inst">parcela ${e.installmentIndex} de ${e.installmentTotal}</span>` : '';
+          const recBadge = e.recurringId ? '<span class="meta-badge badge-rec">🔁 recorrente</span>' : '';
           bodyHTML += `
             <div class="txn-item tappable" id="txn-${e.id}" onclick="openSheet('${e.id}')">
               <div class="txn-icon">${cat.emoji}</div>
               <div class="txn-body">
-                <div class="txn-desc">${escHtml(e.desc)}${sharedBadge}</div>
+                <div class="txn-desc">${escHtml(e.desc)}${instBadge}${recBadge}${sharedBadge}</div>
                 <div class="txn-cat">${cat.name}${e.sub ? ' · ' + escHtml(e.sub) : ''}${e.pay ? ' · ' + getPay(e.pay).emoji + ' ' + getPay(e.pay).name : ''}</div>
               </div>
               <div class="txn-amount" style="color:var(--red)">−${fmt(e.amount)}</div>
@@ -798,6 +890,22 @@ function openSheet(id) {
   document.getElementById('btnDelete').style.display = editing ? 'block' : 'none';
   resetDeleteBtn();
 
+  // Installment & recurring toggles only make sense for NEW entries
+  isInstallment = false;
+  isRecurring = false;
+  document.getElementById('instToggle').classList.remove('active');
+  document.getElementById('instSwitch').classList.remove('on');
+  document.getElementById('instDetail').style.display = 'none';
+  document.getElementById('inputParcelas').value = '';
+  document.getElementById('parcelaPreview').textContent = '';
+  document.getElementById('recToggle').classList.remove('active');
+  document.getElementById('recSwitch').classList.remove('on');
+  document.getElementById('recDetail').style.display = 'none';
+  document.getElementById('recPreview').textContent = '';
+  // Hide both toggles entirely while editing an existing expense
+  document.getElementById('instToggle').style.display = editing ? 'none' : 'flex';
+  document.getElementById('recToggle').style.display = editing ? 'none' : 'flex';
+
   if (editing) {
     document.getElementById('inputDate').value = editing.date;
     document.getElementById('inputAmount').value = editing.amount;
@@ -825,6 +933,7 @@ function openSheet(id) {
     isShared = false;
     renderCatPicker();
     renderPayPicker();
+    populateRecSelects();
     document.getElementById('subGroup').style.display = 'none';
     document.getElementById('sharedToggle').classList.remove('active');
     document.getElementById('sharedSwitch').classList.remove('on');
@@ -887,6 +996,78 @@ function toggleShared() {
   document.getElementById('sharedSwitch').classList.toggle('on', isShared);
 }
 
+// ----- Installment (parcelado) -----
+function toggleInstallment() {
+  isInstallment = !isInstallment;
+  if (isInstallment) {
+    // mutually exclusive with recurring
+    if (isRecurring) toggleRecurring();
+  }
+  document.getElementById('instToggle').classList.toggle('active', isInstallment);
+  document.getElementById('instSwitch').classList.toggle('on', isInstallment);
+  document.getElementById('instDetail').style.display = isInstallment ? 'block' : 'none';
+  if (isInstallment) setTimeout(() => document.getElementById('inputParcelas').focus(), 100);
+  else { document.getElementById('inputParcelas').value = ''; document.getElementById('parcelaPreview').textContent = ''; }
+}
+function updateParcelaPreview() {
+  const preview = document.getElementById('parcelaPreview');
+  const total = parseFloat(document.getElementById('inputAmount').value);
+  const n = parseInt(document.getElementById('inputParcelas').value);
+  if (!total || total <= 0 || !n || n < 2) { preview.textContent = ''; return; }
+  const valorParcela = Math.round((total / n) * 100) / 100;
+  preview.textContent = `${n}x de ${fmt(valorParcela)} — começando neste mês`;
+}
+
+// ----- Recurring (recorrente) -----
+function populateRecSelects() {
+  const monthSel = document.getElementById('inputRecMonth');
+  const yearSel = document.getElementById('inputRecYear');
+  const monthNames = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const now = new Date();
+  monthSel.innerHTML = monthNames.map((m,i) => `<option value="${i}">${m}</option>`).join('');
+  const thisYear = now.getFullYear();
+  let years = '';
+  for (let y = thisYear; y <= thisYear + 5; y++) years += `<option value="${y}">${y}</option>`;
+  yearSel.innerHTML = years;
+  // default: December of current year
+  monthSel.value = 11;
+  yearSel.value = thisYear;
+}
+function toggleRecurring() {
+  isRecurring = !isRecurring;
+  if (isRecurring) {
+    if (isInstallment) toggleInstallment();
+  }
+  document.getElementById('recToggle').classList.toggle('active', isRecurring);
+  document.getElementById('recSwitch').classList.toggle('on', isRecurring);
+  document.getElementById('recDetail').style.display = isRecurring ? 'block' : 'none';
+  if (isRecurring) updateRecPreview();
+  else document.getElementById('recPreview').textContent = '';
+}
+function updateRecPreview() {
+  const preview = document.getElementById('recPreview');
+  const total = parseFloat(document.getElementById('inputAmount').value);
+  const startDate = document.getElementById('inputDate').value;
+  if (!total || total <= 0 || !startDate) { preview.textContent = ''; return; }
+  const endMonth = parseInt(document.getElementById('inputRecMonth').value);
+  const endYear = parseInt(document.getElementById('inputRecYear').value);
+  const count = countRecurringMonths(startDate, endMonth, endYear);
+  if (count < 1) { preview.textContent = 'Data final anterior à inicial'; return; }
+  preview.textContent = `${count}x de ${fmt(total)} (um por mês)`;
+}
+function countRecurringMonths(startDateStr, endMonth, endYear) {
+  const d = new Date(startDateStr + 'T00:00:00');
+  const sM = d.getMonth(), sY = d.getFullYear();
+  return (endYear - sY) * 12 + (endMonth - sM) + 1;
+}
+function onAmountInput() {
+  if (isInstallment) updateParcelaPreview();
+  if (isRecurring) updateRecPreview();
+}
+function onDateInput() {
+  if (isRecurring) updateRecPreview();
+}
+
 // ========================
 // SUBMIT
 // ========================
@@ -929,9 +1110,93 @@ function submitExpense() {
     return;
   }
 
+  // Validate installment / recurring specifics
+  let nParcelas = 0;
+  if (isInstallment) {
+    nParcelas = parseInt(document.getElementById('inputParcelas').value);
+    if (!nParcelas || nParcelas < 2) { showToast('Informe o número de parcelas (mín. 2)', true); return; }
+  }
+  let recCount = 0;
+  if (isRecurring) {
+    const endMonth = parseInt(document.getElementById('inputRecMonth').value);
+    const endYear = parseInt(document.getElementById('inputRecYear').value);
+    recCount = countRecurringMonths(date, endMonth, endYear);
+    if (recCount < 1) { showToast('A data final deve ser igual ou posterior à inicial', true); return; }
+  }
+
+  const now = Date.now();
+  const baseAmount = Math.round(amount * 100) / 100;
+
+  if (isInstallment) {
+    // Split total into N parcels across consecutive months
+    const groupId = 'inst_' + now.toString(36) + Math.random().toString(36).slice(2,6);
+    const valorParcela = Math.round((baseAmount / nParcelas) * 100) / 100;
+    // adjust last parcel for rounding remainder
+    const soma = valorParcela * nParcelas;
+    const ajuste = Math.round((baseAmount - soma) * 100) / 100;
+    for (let i = 0; i < nParcelas; i++) {
+      const valor = (i === nParcelas - 1) ? Math.round((valorParcela + ajuste) * 100) / 100 : valorParcela;
+      expenses.push({
+        id: now.toString(36) + Math.random().toString(36).slice(2,6) + '_' + i,
+        amount: valor,
+        desc,
+        category: selectedCat,
+        sub: selectedSub,
+        pay: selectedPay,
+        shared: isShared,
+        date: addMonths(date, i),
+        installmentId: groupId,
+        installmentIndex: i + 1,
+        installmentTotal: nParcelas,
+        deleted: false,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    save();
+    closeSheet();
+    const d0 = new Date(date + 'T00:00:00');
+    currentMonth = d0.getMonth();
+    currentYear = d0.getFullYear();
+    render();
+    showToast(`Parcelado em ${nParcelas}x registrado! ✓`);
+    if (isSyncEnabled()) syncNow(true);
+    return;
+  }
+
+  if (isRecurring) {
+    // One full-value expense per month from start through chosen end
+    const groupId = 'rec_' + now.toString(36) + Math.random().toString(36).slice(2,6);
+    for (let i = 0; i < recCount; i++) {
+      expenses.push({
+        id: now.toString(36) + Math.random().toString(36).slice(2,6) + '_' + i,
+        amount: baseAmount,
+        desc,
+        category: selectedCat,
+        sub: selectedSub,
+        pay: selectedPay,
+        shared: isShared,
+        date: addMonths(date, i),
+        recurringId: groupId,
+        deleted: false,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    save();
+    closeSheet();
+    const d0 = new Date(date + 'T00:00:00');
+    currentMonth = d0.getMonth();
+    currentYear = d0.getFullYear();
+    render();
+    showToast(`Recorrência de ${recCount} meses registrada! ✓`);
+    if (isSyncEnabled()) syncNow(true);
+    return;
+  }
+
   const expense = {
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
-    amount: Math.round(amount * 100) / 100,
+    id: now.toString(36) + Math.random().toString(36).slice(2,6),
+    amount: baseAmount,
     desc,
     category: selectedCat,
     sub: selectedSub,
@@ -939,8 +1204,8 @@ function submitExpense() {
     shared: isShared,
     date,
     deleted: false,
-    createdAt: Date.now(),
-    updatedAt: Date.now()
+    createdAt: now,
+    updatedAt: now
   };
 
   expenses.push(expense);
@@ -955,6 +1220,20 @@ function submitExpense() {
   render();
   showToast('Gasto registrado! ✓');
   if (isSyncEnabled()) syncNow(true);
+}
+
+// Add N months to a YYYY-MM-DD date string, returning YYYY-MM-DD
+function addMonths(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const targetMonth = d.getMonth() + n;
+  const targetDate = new Date(d.getFullYear(), targetMonth, 1);
+  // clamp day to last day of target month
+  const lastDay = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+  const day = Math.min(d.getDate(), lastDay);
+  const yyyy = targetDate.getFullYear();
+  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 // ========================
@@ -1035,13 +1314,16 @@ function nextMonth() {
 function exportCSV() {
   const monthExp = getMonthExpenses();
   if (monthExp.length === 0) { showToast('Nenhum gasto para exportar', true); return; }
-  const lines = ['Data,Descrição,Categoria,Subcategoria,Recurso,Compartilhado,Valor'];
+  const lines = ['Data,Descrição,Categoria,Subcategoria,Recurso,Tipo,Compartilhado,Valor'];
   monthExp.sort((a,b)=>a.date.localeCompare(b.date)).forEach(e => {
     const cat = getCat(e.category);
     const sub = e.sub || '';
     const pay = e.pay ? getPay(e.pay).name : '';
     const shared = e.shared ? 'Compartilhado' : '';
-    lines.push(`${e.date},"${e.desc.replace(/"/g,'""')}",${cat.name},"${sub}","${pay}",${shared},${e.amount.toFixed(2)}`);
+    let tipo = 'Avulso';
+    if (e.installmentTotal) tipo = `Parcela ${e.installmentIndex} de ${e.installmentTotal}`;
+    else if (e.recurringId) tipo = 'Recorrente';
+    lines.push(`${e.date},"${e.desc.replace(/"/g,'""')}",${cat.name},"${sub}","${pay}","${tipo}",${shared},${e.amount.toFixed(2)}`);
   });
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
